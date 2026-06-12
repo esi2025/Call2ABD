@@ -1,0 +1,6 @@
+{
+  "name": "Azarestan Phonebook",
+  "description": "Bilingual (English and Persian) Corporate Phonebook app with dynamic role visibility (Admin/User), Room DB, search, sync, and integrated direct Call/SMS features.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
