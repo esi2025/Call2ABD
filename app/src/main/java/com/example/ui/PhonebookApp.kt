@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
+import kotlinx.coroutines.launch
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -235,7 +237,18 @@ fun PhonebookMainApp(viewModel: PhonebookViewModel) {
                 msg == "contact_deleted" -> translate.contactDeletedSuccess
                 msg == "account_created" -> translate.accountCreatedSuccess
                 msg == "account_deleted" -> translate.accountDeletedSuccess
-                msg == "sync_success" -> translate.syncSuccess
+                msg == "account_updated" -> {
+                    if (lang == Language.ENGLISH) "Account updated successfully!" else "تغییرات حساب کاربری با موفقیت ذخیره گردید!"
+                }
+                msg == "Error logs cleared" -> {
+                    if (lang == Language.ENGLISH) "Error logs cleared successfully!" else "لاگ خطاها با موفقیت پاکسازی شد!"
+                }
+                msg == "sync_success" -> {
+                    if (lang == Language.ENGLISH) "Update completed successfully!" else "بروزرسانی با موفقیت انجام شد."
+                }
+                msg == "cloud_sync_failed" -> {
+                    if (lang == Language.ENGLISH) "Cloud sync failed. Loaded offline state." else "بروزرسانی ابری انجام نشد. اطلاعات آفلاین بارگذاری گردید."
+                }
                 msg.startsWith("contact_imported_success_") -> {
                     val count = msg.substringAfterLast("_")
                     if (lang == Language.ENGLISH) "Successfully imported $count contacts!" else "تعداد $count مخاطب با موفقیت وارد گردید!"
@@ -529,38 +542,6 @@ fun LoginScreen(viewModel: PhonebookViewModel, translation: Translation) {
                     }
                 }
             }
-
-            // Friendly configuration advice helpers
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-                ),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = "Demo Sign In / ورود دمو",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "• Admin:\n   User: admin / Pass: admin123",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "• Regular User (Hides mobile numbers):\n   User: user / Pass: user123",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
         }
     }
 }
@@ -572,12 +553,16 @@ enum class DashboardTab {
 @Composable
 fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
     val context = LocalContext.current
+    val composeScope = rememberCoroutineScope()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val activeLang by viewModel.currentLanguage.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val contacts by viewModel.filteredContacts.collectAsStateWithLifecycle()
     val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by viewModel.syncProgress.collectAsStateWithLifecycle()
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val currentSort by viewModel.sortOption.collectAsStateWithLifecycle()
+    val isDark by viewModel.isDarkMode.collectAsStateWithLifecycle()
 
     var activeTab by remember { mutableStateOf(DashboardTab.HOME) }
     var showContactDialog by remember { mutableStateOf(false) }
@@ -593,15 +578,15 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
     }
 
     Scaffold(
-        containerColor = Color(0xFFF3F5FA), // Slate Sleek Background
+        containerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF3F5FA), // Slate Sleek Background
         topBar = {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp),
                 shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
+                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
             ) {
                 Column(
@@ -616,7 +601,7 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = when (activeTab) {
                                     DashboardTab.HOME -> translation.appTitle
@@ -625,9 +610,19 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                     DashboardTab.LOGS -> translation.editLogs
                                     DashboardTab.ADMIN -> translation.adminPanel
                                 },
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Black,
-                                color = Color(0xFF0F172A) // Slate 900
+                                style = if (activeTab == DashboardTab.HOME) {
+                                    MaterialTheme.typography.titleMedium.copy(
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = (-0.3).sp,
+                                        lineHeight = 17.sp
+                                    )
+                                } else {
+                                    MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = FontWeight.Black
+                                    )
+                                },
+                                color = if (isDark) Color.White else Color(0xFF0F172A) // Slate 900
                             )
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
@@ -638,43 +633,52 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (isSyncing) translation.syncingState else (if (activeLang == Language.ENGLISH) "Active Directory Sync Active" else "اتصال فعال به پایگاه داده سازمانی"),
+                                    text = if (isSyncing) "$syncStatus ($syncProgress%)" else (if (activeLang == Language.ENGLISH) "Active Directory Sync Active" else "اتصال فعال به پایگاه داده سازمانی"),
                                     style = MaterialTheme.typography.bodySmall,
-                                    fontSize = 11.sp,
+                                    fontSize = 10.sp,
                                     color = Color(0xFF64748B) // Slate 500
                                 )
                             }
                         }
 
-                        // Switch lang & logout actions
+                        // Switch lang & theme actions on all pages
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             // LANG SWITCHER
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(Color(0xFFF1F5F9))
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
                                     .clickable {
                                         viewModel.setLanguage(if (activeLang == Language.ENGLISH) Language.PERSIAN else Language.ENGLISH)
                                     }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
                             ) {
                                 Text(
                                     text = if (activeLang == Language.ENGLISH) "FA" else "EN",
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp,
-                                    color = Color(0xFF0F172A)
+                                    fontSize = 10.sp,
+                                    color = if (isDark) Color.White else Color(0xFF0F172A)
                                 )
                             }
 
-                            // LOGOUT
-                            IconButton(onClick = { viewModel.logout() }) {
-                                Icon(
-                                    imageVector = Icons.Default.ExitToApp,
-                                    contentDescription = "Logout",
-                                    tint = Color(0xFFEF4444)
+                            // THEME SWITCHER
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
+                                    .clickable {
+                                        viewModel.toggleDarkMode()
+                                    }
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                            ) {
+                                Text(
+                                    text = if (isDark) (if (activeLang == Language.ENGLISH) "Light" else "روز") else (if (activeLang == Language.ENGLISH) "Dark" else "شب"),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
+                                    color = if (isDark) Color.White else Color(0xFF0F172A)
                                 )
                             }
                         }
@@ -687,29 +691,48 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedTextField(
+                            BasicTextField(
                                 value = searchQuery,
                                 onValueChange = { viewModel.setSearchQuery(it) },
-                                placeholder = { Text(translation.searchPlaceholder, fontSize = 13.sp, color = Color(0xFF94A3B8)) },
                                 textStyle = LocalTextStyle.current.copy(
-                                    fontSize = 13.sp,
+                                    fontSize = 11.sp,
+                                    color = if (isDark) Color.White else Color(0xFF0F172A),
                                     textAlign = TextAlign.Start
                                 ),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .height(48.dp)
+                                    .height(36.dp)
                                     .testTag("search_input"),
-                                shape = RoundedCornerShape(16.dp),
                                 singleLine = true,
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp), tint = Color(0xFF94A3B8)) },
-                                trailingIcon = {
-                                    if (searchQuery.isNotEmpty()) {
-                                        IconButton(onClick = { viewModel.setSearchQuery("") }) {
-                                            Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp), tint = Color(0xFF64748B))
+                                decorationBox = { innerTextField ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .border(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
+                                            .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF8FAFC), RoundedCornerShape(12.dp))
+                                            .padding(horizontal = 10.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.Top,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(modifier = Modifier.padding(top = 4.dp)) {
+                                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF94A3B8))
+                                        }
+                                        Box(modifier = Modifier.weight(1f).padding(top = 4.dp)) {
+                                            if (searchQuery.isEmpty()) {
+                                                Text(translation.searchPlaceholder, fontSize = 11.sp, color = Color(0xFF94A3B8))
+                                            }
+                                            innerTextField()
+                                        }
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(
+                                                onClick = { viewModel.setSearchQuery("") },
+                                                modifier = Modifier.size(20.dp).padding(top = 2.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(14.dp), tint = Color(0xFF64748B))
+                                            }
                                         }
                                     }
-                                },
-                                colors = getSearchFieldColors()
+                                }
                             )
 
                             // Quick Sync Sync Button
@@ -726,20 +749,57 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
 
                             Box(
                                 modifier = Modifier
-                                    .size(48.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .background(Color(0xFFF1F5F9))
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9))
                                     .clickable(enabled = !isSyncing) { viewModel.syncAndRefresh() },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
                                     contentDescription = "Sync",
-                                    tint = if (isSyncing) Color(0xFF3B82F6) else Color(0xFF0F172A),
+                                    tint = if (isSyncing) Color(0xFF3B82F6) else (if (isDark) Color.White else Color(0xFF0F172A)),
                                     modifier = Modifier
                                         .size(20.dp)
                                         .rotate(if (isSyncing) angle else 0f)
                                 )
+                            }
+                        }
+                        if (isSyncing) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                LinearProgressIndicator(
+                                    progress = syncProgress / 100f,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = Color(0xFF3B82F6),
+                                    trackColor = if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = syncStatus,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569)
+                                    )
+                                    Text(
+                                        text = "$syncProgress%",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color(0xFF3B82F6)
+                                    )
+                                }
                             }
                         }
                     }
@@ -750,8 +810,8 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
             // Sleek Custom Bottom Nav Bar
             Card(
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
+                border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -894,7 +954,7 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                         selectedContactForEdit = null
                         showContactDialog = true
                     },
-                    containerColor = Color(0xFF0F172A), // Slate 900
+                    containerColor = if (isDark) Color(0xFF3B82F6) else Color(0xFF0F172A), // Slate 900 or Sleek Blue
                     contentColor = Color.White,
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.testTag("add_contact_fab")
@@ -941,6 +1001,8 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                             modifier = Modifier.weight(1f)
                         ) {
                             val options = listOf(
+                                PhonebookViewModel.SortOption.CODE_ASC to translation.sortCodeAsc,
+                                PhonebookViewModel.SortOption.CODE_DESC to translation.sortCodeDesc,
                                 PhonebookViewModel.SortOption.NAME_ASC to translation.sortNameAsc,
                                 PhonebookViewModel.SortOption.NAME_DESC to translation.sortNameDesc,
                                 PhonebookViewModel.SortOption.DEPT_ASC to translation.sortDeptAsc,
@@ -948,8 +1010,8 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                             )
                             items(options) { (option, label) ->
                                 val isSelected = currentSort == option
-                                val bgCol = if (isSelected) Color(0xFF2563EB) else Color(0xFFE2E8F0).copy(alpha = 0.5f)
-                                val textCol = if (isSelected) Color.White else Color(0xFF475569)
+                                val bgCol = if (isSelected) Color(0xFF2563EB) else (if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0).copy(alpha = 0.5f))
+                                val textCol = if (isSelected) Color.White else (if (isDark) Color(0xFF94A3B8) else Color(0xFF475569))
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(30.dp))
@@ -999,11 +1061,13 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                         ) {
                             items(contacts, key = { it.id }) { contact ->
                                 val userRole = currentUser?.role
-                                val canViewMobile = userRole == "admin" || userRole == "level_2"
-                                val canCallAndSms = userRole == "admin" || userRole == "level_2" || userRole == "level_1"
+                                val canViewMobile = true
+                                val canViewAnnounced = userRole == "admin" || userRole == "level_2"
+                                val canCallAndSms = true
                                 ContactCard(
                                     contact = contact,
                                     canViewMobile = canViewMobile,
+                                    canViewAnnounced = canViewAnnounced,
                                     canCallAndSms = canCallAndSms,
                                     isAdmin = userRole == "admin",
                                     translation = translation,
@@ -1555,6 +1619,50 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                 }
                             }
 
+                            // Logout Button
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
+                                border = BorderStroke(1.dp, if (isDark) Color(0xFF451A1A) else Color(0xFFFEE2E2)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.logout() }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isDark) Color(0xFF7F1D1D) else Color(0xFFFEF2F2)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ExitToApp,
+                                            contentDescription = "Logout",
+                                            tint = Color(0xFFEF4444),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text(
+                                            text = if (activeLang == Language.ENGLISH) "Logout" else "خروج از حساب کاربری",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFEF4444)
+                                        )
+                                        Text(
+                                            text = if (activeLang == Language.ENGLISH) "Sign out of your active session" else "پایان دادن به نشست فعال و خروج از برنامه",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                        )
+                                    }
+                                }
+                            }
+
                             // Actions
                             Card(
                                 shape = RoundedCornerShape(20.dp),
@@ -1667,6 +1775,894 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
 
                             val isDark = MaterialTheme.colorScheme.background == SleekSecondary
 
+                            // Expandable S3 Settings Card
+                            var isS3SettingsExpanded by remember { mutableStateOf(false) }
+                            var localS3Enabled by remember { mutableStateOf(com.example.data.AppSettings.s3Enabled) }
+                            var localS3Endpoint by remember { mutableStateOf(com.example.data.AppSettings.s3Endpoint) }
+                            var localS3AccessKey by remember { mutableStateOf(com.example.data.AppSettings.s3AccessKey) }
+                            var localS3SecretKey by remember { mutableStateOf(com.example.data.AppSettings.s3SecretKey) }
+                            var localS3BucketName by remember { mutableStateOf(com.example.data.AppSettings.s3BucketName) }
+                            var localS3Region by remember { mutableStateOf(com.example.data.AppSettings.s3Region) }
+                            var localSyncInterval by remember { mutableStateOf(com.example.data.AppSettings.syncIntervalHours.toString()) }
+                            var localDns1 by remember { mutableStateOf(com.example.data.AppSettings.dns1) }
+                            var localDns2 by remember { mutableStateOf(com.example.data.AppSettings.dns2) }
+
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
+                                border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { isS3SettingsExpanded = !isS3SettingsExpanded },
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF3B82F6).copy(alpha = 0.1f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Lock,
+                                                contentDescription = null,
+                                                tint = Color(0xFF3B82F6),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (activeLang == Language.ENGLISH) "Cloud Bucket Storage Settings" else "تنظیمات صندوقچه ابری S3 (آروان، پارسپک، پشتیبان)",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = if (activeLang == Language.ENGLISH) "Configure ParsPack, Arvan Cloud or Poshtiban space" else "تنظیم اتصال به پارسپک، ابر آروان، پشتیبان یا S3",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                            )
+                                        }
+                                        Text(
+                                            text = if (isS3SettingsExpanded) "▲" else "▼",
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+                                    }
+
+                                    if (isS3SettingsExpanded) {
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9))
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        // S3 Enabled Switch
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = if (activeLang == Language.ENGLISH) "Use Custom Cloud Storage" else "استفاده از صندوقچه ابری S3 اختصاصی",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = if (activeLang == Language.ENGLISH) "Upload/Download from S3 bucket instead of default" else "دانلود و آپلود فایل بانک اطلاعات روی فضای ابری شما",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                                )
+                                            }
+                                            androidx.compose.material3.Switch(
+                                                checked = localS3Enabled,
+                                                onCheckedChange = { localS3Enabled = it }
+                                            )
+                                        }
+
+                                        if (localS3Enabled) {
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            
+                                            // S3 Endpoint
+                                            OutlinedTextField(
+                                                value = localS3Endpoint,
+                                                onValueChange = { localS3Endpoint = it },
+                                                label = { Text(if (activeLang == Language.ENGLISH) "S3 Endpoint" else "پایانه یا Endpoint") },
+                                                placeholder = { Text("s3.ir-tb-1.arvanstorage.ir") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = getTextFieldColors()
+                                            )
+                                            
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            // Bucket Name
+                                            OutlinedTextField(
+                                                value = localS3BucketName,
+                                                onValueChange = { localS3BucketName = it },
+                                                label = { Text(if (activeLang == Language.ENGLISH) "Bucket Name" else "نام صندوقچه (Bucket)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = getTextFieldColors()
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            // Access Key
+                                            OutlinedTextField(
+                                                value = localS3AccessKey,
+                                                onValueChange = { localS3AccessKey = it },
+                                                label = { Text(if (activeLang == Language.ENGLISH) "Access Key" else "کلید دسترسی (Access Key)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = getTextFieldColors()
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            // Secret Key
+                                            OutlinedTextField(
+                                                value = localS3SecretKey,
+                                                onValueChange = { localS3SecretKey = it },
+                                                label = { Text(if (activeLang == Language.ENGLISH) "Secret Key" else "کلید رمز (Secret Key)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = getTextFieldColors()
+                                            )
+
+                                            Spacer(modifier = Modifier.height(12.dp))
+
+                                            // Region
+                                            OutlinedTextField(
+                                                value = localS3Region,
+                                                onValueChange = { localS3Region = it },
+                                                label = { Text(if (activeLang == Language.ENGLISH) "Region" else "منطقه (Region)") },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = getTextFieldColors()
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Sync Interval in Hours
+                                        OutlinedTextField(
+                                            value = localSyncInterval,
+                                            onValueChange = { localSyncInterval = it.filter { c -> c.isDigit() } },
+                                            label = { Text(if (activeLang == Language.ENGLISH) "Cache Expire Interval (Hours)" else "زمان انقضای حافظه کش (ساعت)") },
+                                            placeholder = { Text("24") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            colors = getTextFieldColors()
+                                        )
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                                                                 Text(
+                                             text = if (activeLang == Language.ENGLISH) "Custom DNS Configuration (UDP)" else "تنظیمات کارسازهای دی‌ان‌اس اختصاصی (DNS)",
+                                             style = MaterialTheme.typography.bodySmall,
+                                             fontWeight = FontWeight.Bold,
+                                             color = MaterialTheme.colorScheme.onSurface
+                                         )
+                                         Spacer(modifier = Modifier.height(4.dp))
+                                         Text(
+                                             text = if (activeLang == Language.ENGLISH) "DNS servers used to resolve cloud database hostnames" else "یافتن شناسه عددی دیتابیس ابری جهت دور زدن اختلال شبکه یا فیلترینگ",
+                                             style = MaterialTheme.typography.labelSmall,
+                                             color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                         )
+                                         Spacer(modifier = Modifier.height(12.dp))
+
+                                         Row(
+                                             modifier = Modifier.fillMaxWidth(),
+                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                         ) {
+                                             OutlinedTextField(
+                                                 value = localDns1,
+                                                 onValueChange = { localDns1 = it },
+                                                 label = { Text("DNS 1") },
+                                                 placeholder = { Text("217.218.127.127") },
+                                                 modifier = Modifier.weight(1f).testTag("dns_1_input"),
+                                                 colors = getTextFieldColors(),
+                                                 singleLine = true
+                                             )
+                                             OutlinedTextField(
+                                                 value = localDns2,
+                                                 onValueChange = { localDns2 = it },
+                                                 label = { Text("DNS 2") },
+                                                 placeholder = { Text("217.218.155.155") },
+                                                 modifier = Modifier.weight(1f).testTag("dns_2_input"),
+                                                 colors = getTextFieldColors(),
+                                                 singleLine = true
+                                             )
+                                         }
+
+                                         Spacer(modifier = Modifier.height(24.dp))
+                                         HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9))
+                                         Spacer(modifier = Modifier.height(24.dp))
+
+                                         // Save settings button
+                                        Button(
+                                            onClick = {
+                                                com.example.data.AppSettings.s3Enabled = localS3Enabled
+                                                 com.example.data.AppSettings.dns1 = localDns1
+                                                 com.example.data.AppSettings.dns2 = localDns2
+                                                com.example.data.AppSettings.s3Endpoint = localS3Endpoint
+                                                com.example.data.AppSettings.s3AccessKey = localS3AccessKey
+                                                com.example.data.AppSettings.s3SecretKey = localS3SecretKey
+                                                com.example.data.AppSettings.s3BucketName = localS3BucketName
+                                                com.example.data.AppSettings.s3Region = localS3Region
+                                                com.example.data.AppSettings.syncIntervalHours = localSyncInterval.toIntOrNull() ?: 24
+                                                
+                                                Toast.makeText(
+                                                    context,
+                                                    if (activeLang == Language.ENGLISH) "Cloud settings saved successfully!" else "تنظیمات فضای ابری با موفقیت ذخیره شد!",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            },
+                                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                                        ) {
+                                            Text(
+                                                text = if (activeLang == Language.ENGLISH) "Save Cloud Settings" else "ذخیره تنظیمات ابری",
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            // System Error logs & Diagnostics Card
+                            var isErrorsExpanded by remember { mutableStateOf(false) }
+                            val allLogs by viewModel.allAuditLogs.collectAsStateWithLifecycle()
+                            val errorLogs = allLogs.filter { it.actionType.startsWith("ERROR_") }
+                            
+                            var diagnosticUpdateTrigger by remember { mutableStateOf(0) }
+                            val liveDiagLogs = remember(diagnosticUpdateTrigger) {
+                                com.example.data.CloudDbService.diagnosticLogs.toList()
+                            }
+                            
+                            // Test connection state
+                            var testConnectionResult by remember { mutableStateOf<com.example.data.CloudDbService.ConnectionResult?>(null) }
+                            var isTestingConnection by remember { mutableStateOf(false) }
+
+                            Card(
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
+                                border = BorderStroke(1.dp, if (isDark) Color(0xFFEF4444).copy(alpha = 0.3f) else Color(0xFFFCA5A5)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { isErrorsExpanded = !isErrorsExpanded },
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFFEF4444).copy(alpha = 0.1f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Warning,
+                                                contentDescription = null,
+                                                tint = Color(0xFFEF4444),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = if (activeLang == Language.ENGLISH) "Errors & Cloud Diagnostics" else "عیب‌یابی ابری و خطاهای سیستم (لاک ارور)",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (errorLogs.isNotEmpty()) {
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(Color(0xFFEF4444), RoundedCornerShape(10.dp))
+                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = errorLogs.size.toString(),
+                                                            color = Color.White,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = if (activeLang == Language.ENGLISH) "Diagnostics & real-time connection debugger" else "بررسی اتصالات، خطاها و عیب‌یابی عمیق صندوقچه",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                            )
+                                        }
+                                        Text(
+                                            text = if (isErrorsExpanded) "▲" else "▼",
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+                                    }
+
+                                    if (isErrorsExpanded) {
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9))
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        // Cloud Diagnostics Helper
+                                        Text(
+                                            text = if (activeLang == Language.ENGLISH) "S3 & Cloud Sync Diagnostician" else "ابزار تست و سلامت‌سنجی صندوقچه ابری",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    isTestingConnection = true
+                                                    composeScope.launch {
+                                                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                            com.example.data.CloudDbService.testConnection()
+                                                        }
+                                                        testConnectionResult = result
+                                                        isTestingConnection = false
+                                                        diagnosticUpdateTrigger++
+                                                    }
+                                                },
+                                                enabled = !isTestingConnection,
+                                                modifier = Modifier.weight(1f).height(40.dp),
+                                                shape = RoundedCornerShape(10.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6))
+                                            ) {
+                                                if (isTestingConnection) {
+                                                    CircularProgressIndicator(
+                                                        modifier = Modifier.size(16.dp),
+                                                        strokeWidth = 2.dp,
+                                                        color = Color.White
+                                                    )
+                                                } else {
+                                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = if (activeLang == Language.ENGLISH) "Test Cloud Connection" else "تست اتصال به سرور ابری",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+
+                                            if (errorLogs.isNotEmpty() || liveDiagLogs.isNotEmpty()) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        val builder = StringBuilder()
+                                                        builder.append("=== SYSTEM DIAGNOSTICS REPORT ===\n")
+                                                        builder.append("S3 Enabled: ${com.example.data.AppSettings.s3Enabled}\n")
+                                                        builder.append("Endpoint: ${com.example.data.AppSettings.s3Endpoint}\n")
+                                                        builder.append("Bucket: ${com.example.data.AppSettings.s3BucketName}\n")
+                                                        builder.append("Region: ${com.example.data.AppSettings.s3Region}\n\n")
+
+                                                        builder.append("=== LIVE NETWORK TRANSACTIONS ===\n")
+                                                        if (liveDiagLogs.isEmpty()) {
+                                                            builder.append("No live transaction logs recorded.\n")
+                                                        } else {
+                                                            liveDiagLogs.forEachIndexed { idx, diag ->
+                                                                val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                                                                val dateStr = df.format(java.util.Date(diag.timestamp))
+                                                                builder.append("[$idx] $dateStr - ${diag.type} (${diag.status})\n")
+                                                                builder.append("Message: ${diag.message}\n")
+                                                                builder.append("Details:\n${diag.details}\n")
+                                                                builder.append("--------------------------------------------------\n")
+                                                            }
+                                                        }
+
+                                                        builder.append("\n=== PERSISTED ERROR LOGS (AUDIT_LOG) ===\n")
+                                                        if (errorLogs.isEmpty()) {
+                                                            builder.append("No persisted error logs.\n")
+                                                        } else {
+                                                            errorLogs.forEachIndexed { idx, log ->
+                                                                val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                                                                val dateStr = df.format(java.util.Date(log.timestamp))
+                                                                builder.append("[$idx] $dateStr - ${log.itemName} (${log.actionType})\n")
+                                                                builder.append("Details:\n${log.details}\n")
+                                                                builder.append("--------------------------------------------------\n")
+                                                            }
+                                                        }
+                                                        
+                                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                        val clip = android.content.ClipData.newPlainText("All Errors Log", builder.toString())
+                                                        clipboard.setPrimaryClip(clip)
+                                                        Toast.makeText(
+                                                            context, 
+                                                            if (activeLang == Language.ENGLISH) "Diagnostics package copied!" else "بسته عیب‌یابی کامل در کلیپ‌بورد کپی شد!", 
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    },
+                                                    modifier = Modifier.height(40.dp),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f)),
+                                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
+                                                ) {
+                                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = if (activeLang == Language.ENGLISH) "Copy All" else "کپی همه",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Connection Test outcome view
+                                        testConnectionResult?.let { res ->
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = if (res.success) Color(0xFFD1FAE5).copy(alpha = 0.2f) else Color(0xFFFEE2E2).copy(alpha = 0.2f)
+                                                ),
+                                                border = BorderStroke(
+                                                    1.dp, 
+                                                    if (res.success) Color(0xFF10B981).copy(alpha = 0.5f) else Color(0xFFEF4444).copy(alpha = 0.5f)
+                                                ),
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp)) {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Icon(
+                                                            imageVector = if (res.success) Icons.Default.CheckCircle else Icons.Default.Warning,
+                                                            contentDescription = null,
+                                                            tint = if (res.success) Color(0xFF10B981) else Color(0xFFEF4444),
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text(
+                                                            text = if (res.success) 
+                                                                (if (activeLang == Language.ENGLISH) "Connection Successful" else "اتصال موفقیت‌آمیز بود")
+                                                                else (if (activeLang == Language.ENGLISH) "Connection Failed" else "خطا در برقراری اتصال"),
+                                                            fontWeight = FontWeight.Bold,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = if (res.success) Color(0xFF047857) else Color(0xFFB91C1C)
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text(
+                                                        text = res.message,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text(
+                                                        text = res.details,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontSize = 10.sp,
+                                                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .background(if (isDark) Color(0xFF0F172A) else Color(0xFFF1F5F9), RoundedCornerShape(6.dp))
+                                                            .padding(8.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9))
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        // Live Network/API Operations Diagnostic Log Section
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = if (activeLang == Language.ENGLISH) "Real-time Network Transactions" else "تراکنش‌های زنده و دیباگ شبکه ابری",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                TextButton(
+                                                    onClick = {
+                                                        diagnosticUpdateTrigger++
+                                                    },
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                    modifier = Modifier.height(32.dp)
+                                                ) {
+                                                    Text(
+                                                        text = if (activeLang == Language.ENGLISH) "Refresh" else "به‌روزرسانی",
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color(0xFF3B82F6)
+                                                    )
+                                                }
+                                                if (liveDiagLogs.isNotEmpty()) {
+                                                    TextButton(
+                                                        onClick = {
+                                                            com.example.data.CloudDbService.clearDiagnosticLogs()
+                                                            diagnosticUpdateTrigger++
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                        modifier = Modifier.height(32.dp)
+                                                    ) {
+                                                        Text(
+                                                            text = if (activeLang == Language.ENGLISH) "Clear" else "پاکسازی",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = Color(0xFFEF4444)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        if (liveDiagLogs.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC), RoundedCornerShape(12.dp))
+                                                    .padding(16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = if (activeLang == Language.ENGLISH) "No network logs. Click 'Test Cloud Connection' or 'Refresh'." else "هیچ لاگ تراکنشی ثبت نشده است. روی تست اتصال کلیک کنید یا دکمه به‌روزرسانی را بزنید.",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        } else {
+                                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                liveDiagLogs.forEach { diag ->
+                                                    var isDiagExpanded by remember { mutableStateOf(false) }
+                                                    val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                                                    val dateStr = df.format(java.util.Date(diag.timestamp))
+                                                    val isSuccess = diag.status == "SUCCESS"
+                                                    val statusColor = if (isSuccess) Color(0xFF10B981) else Color(0xFFEF4444)
+
+                                                    Card(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable { isDiagExpanded = !isDiagExpanded },
+                                                        colors = CardDefaults.cardColors(
+                                                            containerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+                                                        ),
+                                                        border = BorderStroke(1.dp, if (isDark) Color(0xFF1E293B) else Color(0xFFE2E8F0)),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                     ) {
+                                                         Column(modifier = Modifier.padding(12.dp)) {
+                                                             Row(
+                                                                 modifier = Modifier.fillMaxWidth(),
+                                                                 horizontalArrangement = Arrangement.SpaceBetween,
+                                                                 verticalAlignment = Alignment.CenterVertically
+                                                             ) {
+                                                                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                                     Box(
+                                                                         modifier = Modifier
+                                                                             .size(8.dp)
+                                                                             .clip(CircleShape)
+                                                                             .background(statusColor)
+                                                                     )
+                                                                     Spacer(modifier = Modifier.width(6.dp))
+                                                                     Text(
+                                                                         text = diag.type,
+                                                                         style = MaterialTheme.typography.bodySmall,
+                                                                         fontWeight = FontWeight.Bold,
+                                                                         color = if (isDark) Color.White else Color(0xFF1E293B)
+                                                                     )
+                                                                 }
+                                                                 Text(
+                                                                     text = dateStr,
+                                                                     style = MaterialTheme.typography.labelSmall,
+                                                                     color = Color(0xFF94A3B8)
+                                                                 )
+                                                             }
+                                                             
+                                                             Spacer(modifier = Modifier.height(4.dp))
+                                                             Text(
+                                                                 text = diag.message,
+                                                                 style = MaterialTheme.typography.labelSmall,
+                                                                 fontWeight = FontWeight.SemiBold,
+                                                                 color = if (isSuccess) Color(0xFF10B981) else Color(0xFFEF4444)
+                                                             )
+
+                                                             if (isDiagExpanded) {
+                                                                 Spacer(modifier = Modifier.height(8.dp))
+                                                                 HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0))
+                                                                 Spacer(modifier = Modifier.height(8.dp))
+                                                                 
+                                                                 Text(
+                                                                     text = diag.details,
+                                                                     style = MaterialTheme.typography.bodySmall,
+                                                                     fontFamily = FontFamily.Monospace,
+                                                                     fontSize = 11.sp,
+                                                                     color = if (isDark) Color(0xFFCBD5E1) else Color(0xFF1E293B),
+                                                                     modifier = Modifier
+                                                                         .fillMaxWidth()
+                                                                         .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9), RoundedCornerShape(8.dp))
+                                                                         .padding(8.dp)
+                                                                 )
+
+                                                                 Spacer(modifier = Modifier.height(8.dp))
+                                                                 Button(
+                                                                     onClick = {
+                                                                         val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                                         val clip = android.content.ClipData.newPlainText("Network Debug Details", "API Transaction: ${diag.type}\nStatus: ${diag.status}\nMessage: ${diag.message}\nTime: $dateStr\nDetails:\n${diag.details}")
+                                                                         clipboard.setPrimaryClip(clip)
+                                                                         Toast.makeText(
+                                                                             context,
+                                                                             if (activeLang == Language.ENGLISH) "Transaction log copied!" else "جزئیات تراکنش به کلیپ‌بورد کپی شد!",
+                                                                             Toast.LENGTH_SHORT
+                                                                         ).show()
+                                                                     },
+                                                                     shape = RoundedCornerShape(8.dp),
+                                                                     modifier = Modifier.fillMaxWidth().height(36.dp),
+                                                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCBD5E1), contentColor = Color(0xFF1E293B))
+                                                                 ) {
+                                                                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                                     Spacer(modifier = Modifier.width(6.dp))
+                                                                     Text(
+                                                                         text = if (activeLang == Language.ENGLISH) "Copy Transaction Details" else "کپی جزئیات وب‌سرویس",
+                                                                         fontSize = 11.sp,
+                                                                         fontWeight = FontWeight.Bold
+                                                                     )
+                                                                 }
+                                                             }
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                         }
+
+                                         Spacer(modifier = Modifier.height(20.dp))
+                                         HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFF1F5F9))
+                                         Spacer(modifier = Modifier.height(12.dp))
+
+                                         // Error Log list
+                                         if (errorLogs.isNotEmpty()) {
+                                             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                                                 TextButton(
+                                                     onClick = { viewModel.clearErrorLogs() },
+                                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                     modifier = Modifier.height(32.dp).testTag("clear_error_logs_button")
+                                                 ) {
+                                                     Text(
+                                                         text = if (activeLang == Language.ENGLISH) "Clear Errors" else "پاکسازی خطاها",
+                                                         fontSize = 11.sp,
+                                                         fontWeight = FontWeight.Bold,
+                                                         color = Color(0xFFEF4444)
+                                                     )
+                                                 }
+                                             }
+                                             Spacer(modifier = Modifier.height(4.dp))
+                                         }
+                                         Text(
+                                             text = if (activeLang == Language.ENGLISH) "Persisted Error Logs" else "لیست خطاهای ثبت شده (لاک ارور)",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+
+                                        if (errorLogs.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .background(if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC), RoundedCornerShape(12.dp))
+                                                    .padding(24.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.CheckCircle,
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF10B981),
+                                                        modifier = Modifier.size(36.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    Text(
+                                                        text = if (activeLang == Language.ENGLISH) "No errors logged yet! Smooth sailing." else "هیچ خطایی ثبت نشده است! سیستم کاملا پایدار است.",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                                    )
+                                                }
+                                            }
+                                        } else {
+                                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                errorLogs.forEach { log ->
+                                                    var isDetailsExpanded by remember { mutableStateOf(false) }
+                                                    val df = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                                                    val dateStr = df.format(java.util.Date(log.timestamp))
+
+                                                    Card(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable { isDetailsExpanded = !isDetailsExpanded },
+                                                        colors = CardDefaults.cardColors(
+                                                            containerColor = if (isDark) Color(0xFF0F172A) else Color(0xFFF8FAFC)
+                                                        ),
+                                                        border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    ) {
+                                                        Column(modifier = Modifier.padding(12.dp)) {
+                                                            Row(
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                                verticalAlignment = Alignment.CenterVertically
+                                                            ) {
+                                                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.Warning,
+                                                                        contentDescription = null,
+                                                                        tint = Color(0xFFEF4444),
+                                                                        modifier = Modifier.size(16.dp)
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                                    Text(
+                                                                        text = log.itemName,
+                                                                        style = MaterialTheme.typography.bodySmall,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = if (isDark) Color.White else Color(0xFF1E293B)
+                                                                    )
+                                                                }
+                                                                Text(
+                                                                    text = dateStr,
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = Color(0xFF94A3B8)
+                                                                )
+                                                            }
+                                                            
+                                                            Spacer(modifier = Modifier.height(4.dp))
+                                                            Text(
+                                                                text = if (log.details.length > 120) log.details.take(120) + "..." else log.details,
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569)
+                                                            )
+
+                                                            Spacer(modifier = Modifier.height(6.dp))
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .fillMaxWidth()
+                                                                    .background(
+                                                                        if (isDark) Color(0xFF78350F).copy(alpha = 0.2f) else Color(0xFFFEF3C7),
+                                                                        RoundedCornerShape(8.dp)
+                                                                    )
+                                                                    .border(
+                                                                        1.dp,
+                                                                        if (isDark) Color(0xFFD97706).copy(alpha = 0.4f) else Color(0xFFFDE68A),
+                                                                        RoundedCornerShape(8.dp)
+                                                                    )
+                                                                    .padding(8.dp)
+                                                            ) {
+                                                                Row(
+                                                                    verticalAlignment = Alignment.Top,
+                                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = Icons.Default.Info,
+                                                                        contentDescription = null,
+                                                                        tint = Color(0xFFD97706),
+                                                                        modifier = Modifier.size(16.dp).padding(top = 1.dp)
+                                                                    )
+                                                                    Column {
+                                                                        Text(
+                                                                            text = "تفسیر خطا (فارسی):",
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            fontWeight = FontWeight.Bold,
+                                                                            color = if (isDark) Color(0xFFFBBF24) else Color(0xFF92400E)
+                                                                        )
+                                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                                        Text(
+                                                                            text = when {
+                                                                                log.details.lowercase().contains("unknownhostexception") || log.details.lowercase().contains("unable to resolve hostname") || log.details.lowercase().contains("dns_tci_failed") || log.details.lowercase().contains("dns_doh_failed") -> {
+                                                                                    "خطا در تحلیل دامنه (DNS). آدرس سرور ابری یافت نشد. لطفا کارسازهای DNS یا اتصال اینترنتی خود را بررسی کنید."
+                                                                                }
+                                                                                log.details.lowercase().contains("timeout") || log.details.lowercase().contains("timed out") || log.details.lowercase().contains("sockettimeout") -> {
+                                                                                    "زمان درخواست ارتباط پایان یافت (Timeout). کیفیت شبکه ضعیف است یا سرور ابری به‌کندی پاسخ می‌دهد."
+                                                                                }
+                                                                                log.details.lowercase().contains("unauthorized") || log.details.lowercase().contains("forbidden") || log.details.lowercase().contains("401") || log.details.lowercase().contains("403") || log.details.lowercase().contains("credentials") || log.details.lowercase().contains("signaturedoesnotmatch") || log.details.lowercase().contains("access key") -> {
+                                                                                    "خطای دسترسی نامعتبر. کلیدهای دسترسی (S3 Access/Secret) ثبت شده برای اتصال به دیتابیس صحیح نیستند یا منقضی شده‌اند."
+                                                                                }
+                                                                                log.details.lowercase().contains("not found") || log.details.lowercase().contains("404") || log.details.lowercase().contains("nosuchkey") || log.details.lowercase().contains("nosuchbucket") -> {
+                                                                                    "منبع یا سطل (Bucket) ابری انتخاب شده یافت نشد (کد ۴۰۴). این می‌تواند به دلیل عدم وجود بانک اطلاعاتی اولیه یا نام اشتباه سطل ابری باشد."
+                                                                                }
+                                                                                log.details.lowercase().contains("connection refused") || log.details.lowercase().contains("connect failed") || log.details.lowercase().contains("cannot connect") -> {
+                                                                                    "امکان ایجاد اتصال با سرور ابری مقدور نیست. لطفا از فعال بودن فیلترشکن یا ارتباط سالم پورت‌های شبکه اطمینان حاصل کنید."
+                                                                                }
+                                                                                log.details.lowercase().contains("contacts uploaded: false") || log.details.lowercase().contains("users uploaded: false") -> {
+                                                                                    "بروزرسانی خودکار پس‌زمینه با خطا مواجه شد. کانتکت‌ها یا رکوردهای کاربران ابری بارگذاری نشد."
+                                                                                }
+                                                                                else -> {
+                                                                                    "خطای سیستمی در ارتباط با بستر انتقال داده‌های پایگاه داده ابری. لطفا صحت اطلاعات اتصال را بررسی نمایید."
+                                                                                }
+                                                                            },
+                                                                            style = MaterialTheme.typography.labelSmall,
+                                                                            color = if (isDark) Color(0xFFFCD34D) else Color(0xFFB45309)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+
+                                                            Text(
+                                                                text = "",
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569)
+                                                            )
+
+                                                            if (isDetailsExpanded) {
+                                                                Spacer(modifier = Modifier.height(10.dp))
+                                                                HorizontalDivider(color = if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0))
+                                                                Spacer(modifier = Modifier.height(8.dp))
+                                                                
+                                                                Text(
+                                                                    text = log.details,
+                                                                    style = MaterialTheme.typography.bodySmall,
+                                                                    fontFamily = FontFamily.Monospace,
+                                                                    fontSize = 11.sp,
+                                                                    color = if (isDark) Color(0xFFCBD5E1) else Color(0xFF1E293B),
+                                                                    modifier = Modifier
+                                                                        .fillMaxWidth()
+                                                                        .background(if (isDark) Color(0xFF1E293B) else Color(0xFFF1F5F9), RoundedCornerShape(8.dp))
+                                                                        .padding(8.dp)
+                                                                )
+
+                                                                Spacer(modifier = Modifier.height(8.dp))
+                                                                Button(
+                                                                    onClick = {
+                                                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                                                        val clip = android.content.ClipData.newPlainText("Error Details", "Error: ${log.itemName}\nTime: $dateStr\nDetails:\n${log.details}")
+                                                                        clipboard.setPrimaryClip(clip)
+                                                                        Toast.makeText(
+                                                                            context,
+                                                                            if (activeLang == Language.ENGLISH) "Error copied to clipboard!" else "جزئیات خطا کپی شد!",
+                                                                            Toast.LENGTH_SHORT
+                                                                        ).show()
+                                                                    },
+                                                                    shape = RoundedCornerShape(8.dp),
+                                                                    modifier = Modifier.fillMaxWidth().height(36.dp),
+                                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCBD5E1), contentColor = Color(0xFF1E293B))
+                                                                ) {
+                                                                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                                    Text(
+                                                                        text = if (activeLang == Language.ENGLISH) "Copy Log Details" else "کپی جزئیات خطا",
+                                                                        fontSize = 11.sp,
+                                                                        fontWeight = FontWeight.Bold
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
                             // CSV Bulk Import Card
                             Card(
                                 shape = RoundedCornerShape(20.dp),
@@ -1727,8 +2723,8 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                         )
                                         Text(
                                             text = if (activeLang == Language.ENGLISH) 
-                                                "1. Full Name | 2. Job Title | 3. Department | 4. Short Code | 5. Mobile"
-                                                else "۱. نام و خانوادگی | ۲. پست سازمانی | ۳. واحد سازمانی | ۴. کد کوتاه | ۵. شماره موبایل",
+                                                "1. Full Name | 2. Job Title | 3. Department | 4. Short Code | 5. Mobile | 6. Announced Number (Optional)"
+                                                else "۱. نام و خانوادگی | ۲. پست سازمانی | ۳. واحد سازمانی | ۴. کد کوتاه | ۵. شماره موبایل | ۶. شماره اعلام شده (اختیاری)",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = Color(0xFF10B981),
                                             fontWeight = FontWeight.Bold
@@ -1736,9 +2732,9 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                     }
 
                                     // Template File Content
-                                    val csvContentTemplate = "Full Name,Job Title,Department,Short Code,Mobile\n" +
-                                            "علیرضا احمدی,مدیر پروژه,فنی مهندسی,10201,+989120000001\n" +
-                                            "حسین رضایی,سرپرست کارگاه,اجرایی,20302,+989120000002"
+                                    val csvContentTemplate = "Full Name,Job Title,Department,Short Code,Mobile,Announced Number\n" +
+                                            "علیرضا احمدی,مدیر پروژه,فنی مهندسی,10201,+989120000001,+989120000003\n" +
+                                            "حسین رضایی,سرپرست کارگاه,اجرایی,20302,+989120000002,"
 
                                     val filePickerLauncher = rememberLauncherForActivityResult(
                                         contract = ActivityResultContracts.GetContent()
@@ -1838,8 +2834,8 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                         ) {
                             Card(
                                 shape = RoundedCornerShape(20.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
-                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                colors = CardDefaults.cardColors(containerColor = if (isDark) Color(0xFF1E293B) else Color.White),
+                                border = BorderStroke(1.dp, if (isDark) Color(0xFF334155) else Color(0xFFE2E8F0)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(
@@ -1851,13 +2847,13 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                         modifier = Modifier
                                             .size(64.dp)
                                             .clip(CircleShape)
-                                            .background(Color(0xFFFEF3C7)), // Warm yellow background
+                                            .background(if (isDark) Color(0xFF78350F) else Color(0xFFFEF3C7)), // Warm yellow background
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Lock,
                                             contentDescription = null,
-                                            tint = Color(0xFFD97706), // Warm orange lock link
+                                            tint = if (isDark) Color(0xFFFBBF24) else Color(0xFFD97706), // Warm orange lock link
                                             modifier = Modifier.size(32.dp)
                                         )
                                     }
@@ -1869,14 +2865,14 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                         Text(
                                             text = if (activeLang == Language.ENGLISH) "Administrative Restricted Space" else "محدوده مدیریت - سطح دسترسی ناکافی",
                                             fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF1E293B),
+                                            color = if (isDark) Color.White else Color(0xFF1E293B),
                                             fontSize = 16.sp,
                                             textAlign = TextAlign.Center
                                         )
                                         Text(
                                             text = if (activeLang == Language.ENGLISH) "You are currently signed in as a regular employee. Access to user accounts database and syncing triggers are reserved for Administrators." else "شما با حساب کاربری عادی وارد شده‌اید. تغییرات بر روی کاربران و همگام‌سازی کلی اطلاعات تنها برای مدیران سیستم قابل دسترسی است.",
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = Color(0xFF64748B),
+                                            color = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B),
                                             textAlign = TextAlign.Center,
                                             lineHeight = 16.sp
                                         )
@@ -1888,12 +2884,35 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
                                         modifier = Modifier.fillMaxWidth().height(46.dp),
                                         shape = RoundedCornerShape(12.dp),
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = Color(0xFF0F172A),
+                                            containerColor = if (isDark) Color(0xFF3B82F6) else Color(0xFF0F172A),
                                             contentColor = Color.White
                                         )
                                     ) {
                                         Text(
                                             text = if (activeLang == Language.ENGLISH) "Elevate Privileges (Admin Session)" else "ارتقای سطح دسترسی (نشست ادمین دمو)",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    OutlinedButton(
+                                        onClick = { viewModel.logout() },
+                                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                                        border = BorderStroke(1.dp, Color(0xFFFCA5A5))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ExitToApp,
+                                            contentDescription = "Logout",
+                                            tint = Color(0xFFEF4444),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = if (activeLang == Language.ENGLISH) "Logout from Account" else "خروج از حساب کاربری",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp
                                         )
@@ -1913,14 +2932,15 @@ fun DashboardScreen(viewModel: PhonebookViewModel, translation: Translation) {
             contact = selectedContactForEdit,
             translation = translation,
             onDismiss = { showContactDialog = false },
-            onSave = { name, title, dept, code, mobile ->
+            onSave = { name, title, dept, code, mobile, announced ->
                 viewModel.saveContact(
                     id = selectedContactForEdit?.id ?: 0,
                     name = name,
                     title = title,
                     dept = dept,
                     code = code,
-                    phone = mobile
+                    phone = mobile,
+                    announced = announced
                 )
                 showContactDialog = false
             }
@@ -1968,6 +2988,7 @@ fun getAvatarColors(name: String): Pair<Color, Color> {
 fun ContactCard(
     contact: Contact,
     canViewMobile: Boolean,
+    canViewAnnounced: Boolean,
     canCallAndSms: Boolean, // New parameter for Level 1 support
     isAdmin: Boolean,
     translation: Translation,
@@ -2162,6 +3183,19 @@ fun ContactCard(
                         accentColor = theme.accentColor,
                         isDimmed = !canViewMobile
                     )
+
+                    // Announced Number Detail
+                    DetailItemRow(
+                        icon = Icons.Default.Call,
+                        label = translation.announcedNumberLabel,
+                        value = if (canViewAnnounced) {
+                            if (contact.announcedNumber.isNotBlank()) contact.announcedNumber else "—"
+                        } else {
+                            translation.announcedNumberHidden
+                        },
+                        accentColor = theme.accentColor,
+                        isDimmed = !canViewAnnounced
+                    )
                 }
 
                 if (isAdmin) {
@@ -2295,13 +3329,14 @@ fun ContactFormDialog(
     contact: Contact?,
     translation: Translation,
     onDismiss: () -> Unit,
-    onSave: (String, String, String, String, String) -> Unit
+    onSave: (String, String, String, String, String, String) -> Unit
 ) {
     var name by remember { mutableStateOf(contact?.fullName ?: "") }
     var title by remember { mutableStateOf(contact?.jobTitle ?: "") }
     var dept by remember { mutableStateOf(contact?.department ?: "") }
     var code by remember { mutableStateOf(contact?.shortCode ?: "") }
     var mobile by remember { mutableStateOf(contact?.mobileNumber ?: "") }
+    var announced by remember { mutableStateOf(contact?.announcedNumber ?: "") }
 
     var nameError by remember { mutableStateOf(false) }
     var titleError by remember { mutableStateOf(false) }
@@ -2399,6 +3434,18 @@ fun ContactFormDialog(
                     supportingText = { if (mobileError) Text(translation.validationRequired) },
                     colors = getTextFieldColors()
                 )
+
+                OutlinedTextField(
+                    value = announced,
+                    onValueChange = {
+                        announced = it
+                    },
+                    label = { Text(translation.announcedNumberLabel) },
+                    modifier = Modifier.fillMaxWidth().testTag("add_announced_input"),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    colors = getTextFieldColors()
+                )
             }
         },
         confirmButton = {
@@ -2417,7 +3464,7 @@ fun ContactFormDialog(
                     mobileError = isMobileErr
 
                     if (!isNameErr && !isTitleErr && !isDeptErr && !isCodeErr && !isMobileErr) {
-                        onSave(name, title, dept, code, mobile)
+                        onSave(name, title, dept, code, mobile, announced)
                     }
                 }
             ) {
@@ -2473,6 +3520,9 @@ fun UsersManagementScreen(viewModel: PhonebookViewModel, translation: Translatio
 
     var usernameErr by remember { mutableStateOf(false) }
     var passwordErr by remember { mutableStateOf(false) }
+
+    val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     // User Directory Search State
     var userSearchQuery by remember { mutableStateOf("") }
@@ -2569,7 +3619,7 @@ fun UsersManagementScreen(viewModel: PhonebookViewModel, translation: Translatio
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // EXPANDABLE PERMISSION LEVEL GUIDE PANEL
@@ -2767,7 +3817,7 @@ fun UsersManagementScreen(viewModel: PhonebookViewModel, translation: Translatio
                             },
                             label = { Text(translation.username) },
                             isError = usernameErr,
-                            enabled = editingUser == null, // Prevent editing the username primary key
+                            enabled = editingUser == null || editingUser?.username != "admin", // Allow editing unless editing default admin
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth().testTag("new_username_input"),
                             shape = RoundedCornerShape(12.dp),
@@ -2895,7 +3945,7 @@ fun UsersManagementScreen(viewModel: PhonebookViewModel, translation: Translatio
 
                                 if (!userBlank && !passBlank) {
                                     if (editingUser != null) {
-                                        viewModel.updateAccount(newUsername, newPassword, selectedRole)
+                                        viewModel.updateAccount(editingUser!!.username, newUsername, newPassword, selectedRole)
                                     } else {
                                         viewModel.createAccount(newUsername, newPassword, selectedRole)
                                     }
@@ -3188,6 +4238,9 @@ fun UsersManagementScreen(viewModel: PhonebookViewModel, translation: Translatio
                                         selectedRole = user.role
                                         usernameErr = false
                                         passwordErr = false
+                                        coroutineScope.launch {
+                                            scrollState.animateScrollTo(0)
+                                        }
                                     }) {
                                         Icon(
                                             imageVector = Icons.Default.Edit,
@@ -3255,6 +4308,7 @@ fun DetailItemRow(
     badgeText: Color = Color.Unspecified,
     isDimmed: Boolean = false
 ) {
+    val isDarkTheme = MaterialTheme.colorScheme.background == SleekSecondary
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -3269,7 +4323,7 @@ fun DetailItemRow(
         Text(
             text = "$label:",
             fontSize = 12.sp,
-            color = Color(0xFF64748B),
+            color = if (isDarkTheme) Color(0xFF94A3B8) else Color(0xFF64748B),
             fontWeight = FontWeight.Medium
         )
         Spacer(modifier = Modifier.width(6.dp))
@@ -3291,7 +4345,11 @@ fun DetailItemRow(
             Text(
                 text = value,
                 fontSize = 12.sp,
-                color = if (isDimmed) Color(0xFF94A3B8) else Color(0xFF1E293B),
+                color = if (isDimmed) {
+                    if (isDarkTheme) Color(0xFF64748B) else Color(0xFF94A3B8)
+                } else {
+                    if (isDarkTheme) Color(0xFFF1F5F9) else Color(0xFF1E293B)
+                },
                 fontWeight = if (isDimmed) FontWeight.Normal else FontWeight.SemiBold
             )
         }

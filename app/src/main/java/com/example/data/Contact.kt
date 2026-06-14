@@ -10,5 +10,6 @@ data class Contact(
     val jobTitle: String,
     val department: String,
     val shortCode: String, // 5-digit code
-    val mobileNumber: String // hidden from user UI, but used in calling intents
+    val mobileNumber: String, // hidden from user UI, but used in calling intents
+    val announcedNumber: String = "" // New column "شماره اعلام شده"
 )

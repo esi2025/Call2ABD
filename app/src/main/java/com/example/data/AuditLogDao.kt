@@ -13,4 +13,7 @@ interface AuditLogDao {
 
     @Query("DELETE FROM audit_logs")
     suspend fun clearAllLogs()
+
+    @Query("DELETE FROM audit_logs WHERE actionType LIKE 'ERROR_%'")
+    suspend fun clearErrorLogs()
 }

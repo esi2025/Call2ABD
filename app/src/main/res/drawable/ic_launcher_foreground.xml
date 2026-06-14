@@ -1,8 +1,72 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="72dp"
-        android:height="72dp"
-        android:drawable="@drawable/ic_directory_logo_1781250628491"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Letter C -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 31,44 A 10,10 0 0,0 21,54 A 10,10 0 0,0 31,64" />
+
+    <!-- Letter a -->
+    <!-- Stem -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 39,52 L 39,64" />
+    <!-- Loop -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 39,58 A 4.5,4.5 0 1,0 30,58 A 4.5,4.5 0 1,0 39,58" />
+
+    <!-- First Letter l -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 44,42 L 44,64" />
+
+    <!-- Second Letter l -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 49,42 L 49,64" />
+
+    <!-- Number 2 (much smaller) -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 54,52.5 A 2,2 0 0,1 58,52.5 C 58,54.5 54,56.5 54,58.5 L 58,58.5" />
+
+    <!-- Letter O -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 67.5,44.5 A 5,9.5 0 1,0 67.5,63.5 A 5,9.5 0 1,0 67.5,44.5" />
+
+    <!-- Letter A -->
+    <path
+        android:strokeColor="#7F1D1D"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 77,64 L 82.5,43 L 88,64 M 78.5,57.5 L 86.5,57.5" />
+
+</vector>

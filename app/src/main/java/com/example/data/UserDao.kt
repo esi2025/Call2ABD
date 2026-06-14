@@ -17,6 +17,12 @@ interface UserDao {
     @Query("DELETE FROM users WHERE username = :username")
     suspend fun deleteUserByUsername(username: String)
 
+    @Query("DELETE FROM users")
+    suspend fun deleteAllUsers()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUsers(users: List<User>)
+
     @Query("SELECT COUNT(*) FROM users")
     suspend fun getUserCount(): Int
 }

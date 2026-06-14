@@ -19,7 +19,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize Room Database, DAO and Repository
+        // Initialize AppSettings & Room Database, DAO and Repository
+        com.example.data.AppSettings.init(applicationContext)
         val database = AppDatabase.getDatabase(applicationContext)
         val repository = Repository(database.contactDao(), database.userDao(), database.auditLogDao())
 

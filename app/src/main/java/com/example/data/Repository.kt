@@ -23,6 +23,10 @@ class Repository(
         auditLogDao.clearAllLogs()
     }
 
+    suspend fun clearErrorLogs() {
+        auditLogDao.clearErrorLogs()
+    }
+
     suspend fun updateContact(contact: Contact) {
         contactDao.updateContact(contact)
     }
@@ -49,5 +53,21 @@ class Repository(
 
     suspend fun getUserCount(): Int {
         return userDao.getUserCount()
+    }
+
+    suspend fun deleteAllContacts() {
+        contactDao.deleteAllContacts()
+    }
+
+    suspend fun insertContacts(contacts: List<Contact>) {
+        contactDao.insertContacts(contacts)
+    }
+
+    suspend fun deleteAllUsers() {
+        userDao.deleteAllUsers()
+    }
+
+    suspend fun insertUsers(users: List<User>) {
+        userDao.insertUsers(users)
     }
 }

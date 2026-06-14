@@ -20,6 +20,12 @@ interface ContactDao {
     @Query("DELETE FROM contacts WHERE id = :id")
     suspend fun deleteContactById(id: Int)
 
+    @Query("DELETE FROM contacts")
+    suspend fun deleteAllContacts()
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertContacts(contacts: List<Contact>)
+
     @Query("SELECT COUNT(*) FROM contacts")
     suspend fun getContactCount(): Int
 }

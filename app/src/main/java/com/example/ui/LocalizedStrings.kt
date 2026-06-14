@@ -25,6 +25,8 @@ data class Translation(
     val shortCode: String,
     val mobileNumber: String,
     val mobileNumberHidden: String,
+    val announcedNumberLabel: String,
+    val announcedNumberHidden: String,
     val callAction: String,
     val smsAction: String,
     val syncRefreshButton: String,
@@ -68,7 +70,9 @@ data class Translation(
     val sortNameAsc: String,
     val sortNameDesc: String,
     val sortDeptAsc: String,
-    val sortDeptDesc: String
+    val sortDeptDesc: String,
+    val sortCodeAsc: String,
+    val sortCodeDesc: String
 )
 
 object LocalizedStrings {
@@ -93,6 +97,8 @@ object LocalizedStrings {
         shortCode = "Short Code",
         mobileNumber = "Mobile Number",
         mobileNumberHidden = "[Hidden Mobile Number]",
+        announcedNumberLabel = "Announced Number",
+        announcedNumberHidden = "[Hidden Announced Number]",
         callAction = "Direct Call",
         smsAction = "Direct SMS",
         syncRefreshButton = "Sync & Refresh",
@@ -136,7 +142,9 @@ object LocalizedStrings {
         sortNameAsc = "Name (A-Z)",
         sortNameDesc = "Name (Z-A)",
         sortDeptAsc = "Department (A-Z)",
-        sortDeptDesc = "Department (Z-A)"
+        sortDeptDesc = "Department (Z-A)",
+        sortCodeAsc = "Short Code (Asc)",
+        sortCodeDesc = "Short Code (Desc)"
     )
 
     val FA = Translation(
@@ -148,8 +156,8 @@ object LocalizedStrings {
         invalidCredentials = "نام کاربری یا رمز عبور نامعتبر است.",
         adminRole = "مدیر سیستم (ادمین)",
         regularUserRole = "کاربر عادی",
-        level1Role = "کاربر سطح ۱ (دسترسی محدود - بدون موبایل)",
-        level2Role = "کاربر سطح ۲ (دسترسی کامل با شماره موبایل)",
+        level1Role = "کاربر سطح ۱ (دسترسی به شماره موبایل دارد - بدون شماره اعلام شده)",
+        level2Role = "کاربر سطح ۲ (دسترسی کامل به شماره موبایل و شماره اعلام شده)",
         selectLanguage = "زبان / Language",
         loggedInAs = "کاربر فعلی",
         role = "نقش کاربری",
@@ -160,6 +168,8 @@ object LocalizedStrings {
         shortCode = "کد کوتاه ۵ رقمی",
         mobileNumber = "شماره موبایل",
         mobileNumberHidden = "[شماره تلفن محفوظ]",
+        announcedNumberLabel = "شماره اعلام شده",
+        announcedNumberHidden = "[شماره اعلام شده محفوظ است]",
         callAction = "تماس مستقیم",
         smsAction = "ارسال پیامک",
         syncRefreshButton = "همگام‌سازی و بروزرسانی",
@@ -203,7 +213,9 @@ object LocalizedStrings {
         sortNameAsc = "نام خانوادگی و نام (صعودی)",
         sortNameDesc = "نام خانوادگی و نام (نزولی)",
         sortDeptAsc = "واحد سازمانی (صعودی)",
-        sortDeptDesc = "واحد سازمانی (نزولی)"
+        sortDeptDesc = "واحد سازمانی (نزولی)",
+        sortCodeAsc = "کد کوتاه (صعودی)",
+        sortCodeDesc = "کد کوتاه (نزولی)"
     )
 
     fun get(lang: Language): Translation {

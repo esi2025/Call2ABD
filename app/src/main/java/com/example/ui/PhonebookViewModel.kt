@@ -7,6 +7,7 @@ import com.example.data.Contact
 import com.example.data.Repository
 import com.example.data.User
 import com.example.data.AuditLog
+import com.example.data.CloudDbService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -26,13 +27,15 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
     val currentScreen: StateFlow<Screen> = _currentScreen.asStateFlow()
 
     enum class SortOption {
+        CODE_ASC,
+        CODE_DESC,
         NAME_ASC,
         NAME_DESC,
         DEPT_ASC,
         DEPT_DESC
     }
 
-    private val _sortOption = MutableStateFlow(SortOption.NAME_ASC)
+    private val _sortOption = MutableStateFlow(SortOption.CODE_ASC)
     val sortOption: StateFlow<SortOption> = _sortOption.asStateFlow()
 
     fun updateSortOption(option: SortOption) {
@@ -48,26 +51,37 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
+    private val _syncProgress = MutableStateFlow(0)
+    val syncProgress: StateFlow<Int> = _syncProgress.asStateFlow()
+
+    private val _syncStatus = MutableStateFlow("")
+    val syncStatus: StateFlow<String> = _syncStatus.asStateFlow()
+
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
-    private val _isDarkMode = MutableStateFlow(false)
+    private val _isDarkMode = MutableStateFlow(true)
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
 
     fun toggleDarkMode() {
         _isDarkMode.value = !_isDarkMode.value
     }
 
-    fun updateAccount(usernameInput: String, passwordInput: String, roleInput: String) {
+    fun updateAccount(oldUsername: String, usernameInput: String, passwordInput: String, roleInput: String) {
         viewModelScope.launch {
-            if (usernameInput.trim().isEmpty() || passwordInput.isEmpty()) {
+            val cleanOld = oldUsername.trim().lowercase()
+            val cleanNew = usernameInput.trim().lowercase()
+            if (cleanNew.isEmpty() || passwordInput.isEmpty()) {
                 return@launch
             }
+            if (cleanOld != cleanNew) {
+                repository.deleteUserByUsername(cleanOld)
+            }
             val updatedUser = User(
-                username = usernameInput.trim().lowercase(),
+                username = cleanNew,
                 password = passwordInput,
                 role = roleInput
             )
@@ -75,13 +89,14 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
             repository.insertAuditLog(
                 AuditLog(
                     actionType = "UPDATE_USER",
-                    itemName = updatedUser.username,
-                    details = "Role: $roleInput",
+                    itemName = cleanNew,
+                    details = if (cleanOld != cleanNew) "Renamed from $cleanOld. Role: $roleInput" else "Role: $roleInput",
                     performedBy = _currentUser.value?.username ?: "System"
                 )
             )
             showToast("account_updated")
-            if (usernameInput.trim().lowercase() == _currentUser.value?.username) {
+            pushLocalStateToCloud()
+            if (cleanOld == _currentUser.value?.username) {
                 _currentUser.value = updatedUser
             }
         }
@@ -116,6 +131,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
             }
             if (importCount > 0) {
                 showToast("imported_success_$importCount")
+                pushLocalStateToCloud()
             } else {
                 showToast("No valid users found.")
             }
@@ -136,6 +152,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                     val dept = parts[2]
                     val code = parts[3]
                     val phone = parts[4]
+                    val announced = if (parts.size >= 6) parts[5] else ""
                     if (name.contains("Name", ignoreCase = true) || name.contains("نام")) continue
                     if (name.isEmpty() || code.isEmpty() || phone.isEmpty()) continue
                     
@@ -144,7 +161,8 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                         jobTitle = title,
                         department = dept,
                         shortCode = code,
-                        mobileNumber = phone
+                        mobileNumber = phone,
+                        announcedNumber = announced
                     )
                     repository.insertContact(contact)
                     importCount++
@@ -152,6 +170,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
             }
             if (importCount > 0) {
                 showToast("contact_imported_success_$importCount")
+                pushLocalStateToCloud()
                 repository.insertAuditLog(
                     AuditLog(
                         actionType = "BULK_IMPORT_CONTACTS",
@@ -189,6 +208,8 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
             }
         }
         when (sortOpt) {
+            SortOption.CODE_ASC -> filtered.sortedBy { it.shortCode }
+            SortOption.CODE_DESC -> filtered.sortedByDescending { it.shortCode }
             SortOption.NAME_ASC -> filtered.sortedBy { it.fullName }
             SortOption.NAME_DESC -> filtered.sortedByDescending { it.fullName }
             SortOption.DEPT_ASC -> filtered.sortedBy { it.department }
@@ -207,8 +228,32 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 if (repository.getContactCount() == 0) {
                     seedDefaultContacts()
                 }
+                // Automatically retrieve fresh updates from cloud database on start if cache has expired
+                syncAndRefreshIfNeeded()
             } catch (e: Exception) {
                 // Handle seeding errors gracefully
+            }
+        }
+    }
+
+    // Checks if the local cache has expired (e.g., 24 hours / once a day) before performing active sync on start
+    fun syncAndRefreshIfNeeded() {
+        viewModelScope.launch {
+            val currentTime = System.currentTimeMillis()
+            val lastSync = com.example.data.AppSettings.lastSyncTimestamp
+            val intervalMillis = com.example.data.AppSettings.syncIntervalHours * 60 * 60 * 1000L
+            
+            // Check if Room database has actual cached contacts & users
+            val hasCachedContacts = repository.getContactCount() > 0
+            val hasCachedUsers = repository.getUserCount() > 0
+            
+            val cacheExpired = (currentTime - lastSync) >= intervalMillis
+            
+            if (!hasCachedContacts || !hasCachedUsers || cacheExpired) {
+                println("PhonebookViewModel: Cache expired or empty. Triggering background sync.")
+                syncAndRefresh(showToastOnCompletion = false)
+            } else {
+                println("PhonebookViewModel: Local database cache is fresh. Skipping network sync on startup.")
             }
         }
     }
@@ -297,7 +342,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
     }
 
     // CONTACT ACTIONS (CRUD for Admin / View for Admin)
-    fun saveContact(id: Int, name: String, title: String, dept: String, code: String, phone: String) {
+    fun saveContact(id: Int, name: String, title: String, dept: String, code: String, phone: String, announced: String = "") {
         viewModelScope.launch {
             val contact = Contact(
                 id = if (id == 0) 0 else id,
@@ -305,7 +350,8 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 jobTitle = title.trim(),
                 department = dept.trim(),
                 shortCode = code.trim(),
-                mobileNumber = phone.trim()
+                mobileNumber = phone.trim(),
+                announcedNumber = announced.trim()
             )
             if (id == 0) {
                 repository.insertContact(contact)
@@ -329,6 +375,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 )
             }
             showToast("contact_saved")
+            pushLocalStateToCloud()
         }
     }
 
@@ -352,6 +399,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 repository.deleteContactById(id)
             }
             showToast("contact_deleted")
+            pushLocalStateToCloud()
         }
     }
 
@@ -376,6 +424,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 )
             )
             showToast("account_created")
+            pushLocalStateToCloud()
         }
     }
 
@@ -396,6 +445,7 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
                 )
             )
             showToast("account_deleted")
+            pushLocalStateToCloud()
         }
     }
 
@@ -406,31 +456,195 @@ class PhonebookViewModel(private val repository: Repository) : ViewModel() {
         }
     }
 
-    // REFRESH & SYNC ACTION (Simulated cloud backup sync)
-    fun syncAndRefresh() {
+    fun clearErrorLogs() {
+        viewModelScope.launch {
+            repository.clearAllAuditLogs()
+            CloudDbService.clearDiagnosticLogs()
+            showToast("Error logs cleared")
+        }
+    }
+
+    // REFRESH & SYNC ACTION (Real KVDB/S3 cloud directory sync with connection test, progress and Persian status)
+    fun syncAndRefresh(showToastOnCompletion: Boolean = true) {
         viewModelScope.launch {
             _isSyncing.value = true
-            // Dynamic delay simulation for internet handshake
-            delay(1500)
+            _syncProgress.value = 10
+            _syncStatus.value = "در حال برقراری ارتباط با دیتابیس ابری..."
             
-            // Re-seed default contacts if database got cleared, or add a new updated record to demonstrate updates
-            val count = repository.getContactCount()
-            if (count == 0) {
-                seedDefaultContacts()
-            } else {
-                // Ensure a nice demo sync item: adds "Simulated Sync Contact" which proves synchronizing updates
-                val syncDemo = Contact(
-                    fullName = "Cloud Sync Bot / بات سرور مرکزی",
-                    jobTitle = "Automated System / هسته مرکزی همگام‌ساز",
-                    department = "IT Support / واحد فناوری اطلاعات",
-                    shortCode = "99999",
-                    mobileNumber = "+989000000000"
-                )
-                repository.insertContact(syncDemo)
+            val success = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    // Step 1: Ping / Test connections
+                    val connResult = CloudDbService.testConnection()
+                    if (!connResult.success) {
+                        _syncProgress.value = 0
+                        _syncStatus.value = "خطا در برقراری ارتباط با دیتابیس ابری!"
+                        repository.insertAuditLog(
+                            AuditLog(
+                                actionType = "ERROR_SYNC",
+                                itemName = "Connection Check Failed",
+                                details = "Message: ${connResult.message}\nDetails: ${connResult.details}",
+                                performedBy = "System"
+                            )
+                        )
+                        return@withContext false
+                    }
+                    
+                    // Signal Connection Success
+                    _syncStatus.value = "اتصال موفق به دیتابیس برقرار شد."
+                    _syncProgress.value = 35
+                    kotlinx.coroutines.delay(850) // Small visual delay to appreciate success message
+                    
+                    // Step 2: Download Contacts
+                    _syncStatus.value = "در حال دریافت لیست مخاطبین..."
+                    _syncProgress.value = 55
+                    val cloudContacts = CloudDbService.downloadContacts()
+                    kotlinx.coroutines.delay(650)
+                    
+                    // Step 3: Download Users
+                    _syncStatus.value = "در حال دریافت حساب‌های کاربری..."
+                    _syncProgress.value = 75
+                    val cloudUsers = CloudDbService.downloadUsers()
+                    kotlinx.coroutines.delay(500)
+                    
+                    if (cloudContacts == null || cloudUsers == null) {
+                        _syncStatus.value = "خطا در دریافت فایل‌های ابری."
+                        _syncProgress.value = 0
+                        val detailsBuilder = StringBuilder()
+                        detailsBuilder.append("Failed to download database files from Cloud.\n")
+                        detailsBuilder.append("S3 Enabled: ${com.example.data.AppSettings.s3Enabled}\n")
+                        if (com.example.data.AppSettings.s3Enabled) {
+                            detailsBuilder.append("Endpoint: ${com.example.data.AppSettings.s3Endpoint}\n")
+                            detailsBuilder.append("Bucket: ${com.example.data.AppSettings.s3BucketName}\n")
+                            detailsBuilder.append("Access Key: ${com.example.data.AppSettings.s3AccessKey.take(4)}***\n")
+                        } else {
+                            detailsBuilder.append("KVDB Endpoint\n")
+                        }
+                        repository.insertAuditLog(
+                            AuditLog(
+                                actionType = "ERROR_SYNC",
+                                itemName = "Sync Download Null",
+                                details = detailsBuilder.toString(),
+                                performedBy = "System"
+                            )
+                        )
+                        false
+                    } else if (cloudContacts.isEmpty() && cloudUsers.isEmpty()) {
+                        _syncStatus.value = "دیتابیس خالی است. در حال آغاز راه‌اندازی اولیه..."
+                        _syncProgress.value = 85
+                        // Cloud has never been initialized. Seed the cloud!
+                        val localContacts = repository.allContacts.first()
+                        val localUsers = repository.allUsers.first()
+                        
+                        var contactsToUpload = localContacts
+                        if (contactsToUpload.isEmpty()) {
+                            seedDefaultContacts()
+                            contactsToUpload = repository.allContacts.first()
+                        }
+                        
+                        var usersToUpload = localUsers
+                        if (usersToUpload.isEmpty()) {
+                            repository.insertUser(User("admin", "admin123", "admin"))
+                            repository.insertUser(User("user", "user123", "level_1"))
+                            usersToUpload = repository.allUsers.first()
+                        }
+                        
+                        val uploadContactsSuccess = CloudDbService.uploadContacts(contactsToUpload)
+                        val uploadUsersSuccess = CloudDbService.uploadUsers(usersToUpload)
+                        val ok = uploadContactsSuccess && uploadUsersSuccess
+                        if (ok) {
+                            com.example.data.AppSettings.lastSyncTimestamp = System.currentTimeMillis()
+                            _syncStatus.value = "بروزرسانی با موفقیت انجام شد."
+                            _syncProgress.value = 100
+                        } else {
+                            _syncStatus.value = "خطا در آپلود اطلاعات اولیه به ابر."
+                            _syncProgress.value = 0
+                            repository.insertAuditLog(
+                                AuditLog(
+                                    actionType = "ERROR_SYNC",
+                                    itemName = "Cloud Initial Seed Failed",
+                                    details = "Contacts uploaded: $uploadContactsSuccess, Users uploaded: $uploadUsersSuccess",
+                                    performedBy = "System"
+                                )
+                            )
+                        }
+                        ok
+                    } else {
+                        _syncStatus.value = "در حال بازنویسی و همگام‌سازی اطلاعات محلی..."
+                        _syncProgress.value = 90
+                        // Override local DB content with downloaded cloud contents as the true directory source
+                        repository.deleteAllContacts()
+                        repository.insertContacts(cloudContacts)
+                        
+                        repository.deleteAllUsers()
+                        repository.insertUsers(cloudUsers)
+                        
+                        // Update cache timestamp upon successful down-sync
+                        com.example.data.AppSettings.lastSyncTimestamp = System.currentTimeMillis()
+                        _syncStatus.value = "بروزرسانی با موفقیت انجام شد."
+                        _syncProgress.value = 100
+                        true
+                    }
+                } catch (e: Exception) {
+                    _syncProgress.value = 0
+                    _syncStatus.value = "خطا: ${e.localizedMessage ?: e.message ?: "مشکل ارتباطی"}"
+                    val errMsg = e.localizedMessage ?: e.message ?: "Unknown Exception"
+                    repository.insertAuditLog(
+                        AuditLog(
+                            actionType = "ERROR_SYNC",
+                            itemName = "Sync Exception Caught",
+                            details = "Message: $errMsg\n\nStacktrace:\n${e.stackTraceToString()}",
+                            performedBy = "System"
+                        )
+                    )
+                    e.printStackTrace()
+                    false
+                }
             }
             
             _isSyncing.value = false
-            showToast("sync_success")
+            if (success) {
+                if (showToastOnCompletion) {
+                    showToast("sync_success")
+                }
+            } else {
+                if (showToastOnCompletion) {
+                    showToast("cloud_sync_failed")
+                }
+            }
+        }
+    }
+
+    private fun pushLocalStateToCloud() {
+        viewModelScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                try {
+                    val localContacts = repository.allContacts.first()
+                    val localUsers = repository.allUsers.first()
+                    val contactsOk = CloudDbService.uploadContacts(localContacts)
+                    val usersOk = CloudDbService.uploadUsers(localUsers)
+                    if (!contactsOk || !usersOk) {
+                        repository.insertAuditLog(
+                            AuditLog(
+                                actionType = "ERROR_SYNC",
+                                itemName = "Bulk Auto-Push Failed",
+                                details = "Contacts uploaded: $contactsOk, Users uploaded: $usersOk",
+                                performedBy = "System"
+                            )
+                        )
+                    }
+                } catch (e: Exception) {
+                    val errMsg = e.localizedMessage ?: e.message ?: "Unknown Exception"
+                    repository.insertAuditLog(
+                        AuditLog(
+                            actionType = "ERROR_SYNC",
+                            itemName = "Bulk Auto-Push Exception",
+                            details = "Message: $errMsg\n\nStacktrace:\n${e.stackTraceToString()}",
+                            performedBy = "System"
+                        )
+                    )
+                    e.printStackTrace()
+                }
+            }
         }
     }
 }
